@@ -1,29 +1,136 @@
-name: Create RDP User with Fixed Password
-  shell: pwsh
-  run: |
-    $username = "AI"
-    $password = "AI"
-    $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+name: "Windows 11 Tailscale Workflow"
+on:
+  workflow_dispatch:
 
-    $user = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+env:
+  TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
 
-    if (-not $user) {
-        New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires -ErrorAction Stop
-        Write-Host "Created local user '$username'"
-    }
-    else {
-        $user | Set-LocalUser -Password $securePass -PasswordNeverExpires $true
-        Write-Host "User '$username' already exists – password updated"
-    }
+jobs:
+  secure-rdp:
+    runs-on: windows-2022
+    timeout-minutes: 350
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-    Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-    Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+         
+          # Allow incoming RDP on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-    "RDP_CREDS=User: $username | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Restart Remote Desktop service
+          Restart-Service -Name TermService -Force
 
-    if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
-        Write-Error "User creation/update failed"
-        exit 1
-    }
+      - name: Create RDP User with Fixed Password
+        run: |
+          $password = "AI123456"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-    Write-Host "RDP user '$username' is ready."
+          if (-not (Get-LocalUser -Name "AI" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "AI" -Password $securePass -AccountNeverExpires
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member "AI" -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "AI" -ErrorAction SilentlyContinue
+         
+          echo "RDP_CREDS=User: AI | Password: $password" >> $env:GITHUB_ENV
+         
+          if (-not (Get-LocalUser -Name "AI")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+         
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Fixed hostname so it always reconnects as the same device
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=$env:TAILSCALE_AUTHKEY `
+            --hostname=gh-runner-ai `
+            --accept-routes
+         
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 15) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if ($tsIP) { break }
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+         
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+     
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+         
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Maintain Connection + Watch RDP User
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: AI"
+          Write-Host "Password: AI123456"
+          Write-Host "==================`n"
+
+          $rdpProfile = "C:\Users\AI"
+          $startupPath = "$rdpProfile\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+          $downloadUrl = "https://gitlab.com/MR.English2008/pcme_rdp/-/raw/main/Downloads.bat"
+          $downloadPath = "$startupPath\Downloads.bat"
+
+          while ($true) {
+              if (Test-Path $rdpProfile) {
+                  try {
+                      if (-not (Test-Path $startupPath)) {
+                          New-Item -ItemType Directory -Path $startupPath -Force | Out-Null
+                      }
+                      Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadPath -UseBasicParsing
+                      Write-Host "✅ Downloads.bat copied to $downloadPath"
+                      cmd /c $downloadPath
+                      Write-Host "✅ Downloads.bat executed successfully"
+                      break
+                  }
+                  catch {
+                      Write-Host "❌ Error copying or executing Downloads.bat: $($_.Exception.Message)"
+                      break
+                  }
+              }
+              else {
+                  Write-Host "[$(Get-Date)] Waiting for AI profile to be created..."
+                  Start-Sleep -Seconds 30
+              }
+          }
+
+          # Keep runner alive
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
