@@ -1,4 +1,4 @@
-- name: Create RDP User with Fixed Password
+name: Create RDP User with Fixed Password
   shell: pwsh
   run: |
     $username = "AI"
@@ -8,27 +8,19 @@
     $user = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
 
     if (-not $user) {
-        New-LocalUser -Name $username `
-                      -Password $securePass `
-                      -AccountNeverExpires `
-                      -PasswordNeverExpires `
-                      -ErrorAction Stop
+        New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires -ErrorAction Stop
         Write-Host "Created local user '$username'"
     }
     else {
-        # Update password if the user already exists
         $user | Set-LocalUser -Password $securePass -PasswordNeverExpires $true
         Write-Host "User '$username' already exists – password updated"
     }
 
-    # Ensure membership in the required groups
     Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
     Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
 
-    # Export credentials for later steps
     "RDP_CREDS=User: $username | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-    # Final verification
     if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
         Write-Error "User creation/update failed"
         exit 1
