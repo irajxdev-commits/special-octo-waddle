@@ -32,7 +32,7 @@ jobs:
 
       - name: Create RDP User with Fixed Password
         run: |
-          $password = "AI123456"
+          $password = "Ai123456"    # has uppercase + lowercase + digits
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
           if (-not (Get-LocalUser -Name "AI" -ErrorAction SilentlyContinue)) {
