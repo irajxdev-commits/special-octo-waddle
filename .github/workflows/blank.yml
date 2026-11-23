@@ -1,20 +1,40 @@
-      - name: Create RDP User with Fixed Password
+- name: Create RDP User with Fixed Password
+        shell: pwsh
         run: |
-          $username = "AI"
-          $password = "AI"
+          $ErrorActionPreference = "Stop"
 
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          $username = "rdpuser"
+          $password = "RdpUser!2026" # Must meet Windows complexity rules; prefer secrets.RDP_PASSWORD
 
-          if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          $securePass = ConvertTo-SecureString -String $password -AsPlainText -Force
+
+          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+          if (-not $existingUser) {
+              New-LocalUser `
+                  -Name $username `
+                  -Password $securePass `
+                  -FullName "RDP User" `
+                  -Description "Automated RDP access account" `
+                  -AccountNeverExpires `
+                  -PasswordNeverExpires
+          } else {
+              Set-LocalUser -Name $username -Password $securePass -PasswordNeverExpires
           }
 
-          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          $groups = @("Administrators", "Remote Desktop Users")
+          foreach ($group in $groups) {
+              $member = Get-LocalGroupMember -Group $group -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -like "*\$username" -or $_.Name -eq $username }
+              if (-not $member) {
+                  Add-LocalGroupMember -Group $group -Member $username
+              }
+          }
 
-          echo "RDP_CREDS=User: AI | Password: AI" >> $env:GITHUB_ENV
-
-          if (-not (Get-LocalUser -Name $username)) {
-              Write-Error "User creation failed"
+          $verifyUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
+          if (-not $verifyUser) {
+              Write-Error "User creation failed for '$username'."
               exit 1
           }
+
+          "RDP_CREDS=User: $username | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Successfully configured local user '$username'."
