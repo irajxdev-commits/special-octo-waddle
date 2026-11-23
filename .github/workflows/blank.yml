@@ -1,40 +1,37 @@
 - name: Create RDP User with Fixed Password
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+  shell: pwsh
+  run: |
+    $username = "AI"
+    $password = "AI"
+    $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          $username = "rdpuser"
-          $password = "RdpUser!2026" # Must meet Windows complexity rules; prefer secrets.RDP_PASSWORD
+    $user = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
 
-          $securePass = ConvertTo-SecureString -String $password -AsPlainText -Force
+    if (-not $user) {
+        New-LocalUser -Name $username `
+                      -Password $securePass `
+                      -AccountNeverExpires `
+                      -PasswordNeverExpires `
+                      -ErrorAction Stop
+        Write-Host "Created local user '$username'"
+    }
+    else {
+        # Update password if the user already exists
+        $user | Set-LocalUser -Password $securePass -PasswordNeverExpires $true
+        Write-Host "User '$username' already exists – password updated"
+    }
 
-          $existingUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          if (-not $existingUser) {
-              New-LocalUser `
-                  -Name $username `
-                  -Password $securePass `
-                  -FullName "RDP User" `
-                  -Description "Automated RDP access account" `
-                  -AccountNeverExpires `
-                  -PasswordNeverExpires
-          } else {
-              Set-LocalUser -Name $username -Password $securePass -PasswordNeverExpires
-          }
+    # Ensure membership in the required groups
+    Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
+    Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
 
-          $groups = @("Administrators", "Remote Desktop Users")
-          foreach ($group in $groups) {
-              $member = Get-LocalGroupMember -Group $group -ErrorAction SilentlyContinue |
-                  Where-Object { $_.Name -like "*\$username" -or $_.Name -eq $username }
-              if (-not $member) {
-                  Add-LocalGroupMember -Group $group -Member $username
-              }
-          }
+    # Export credentials for later steps
+    "RDP_CREDS=User: $username | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          $verifyUser = Get-LocalUser -Name $username -ErrorAction SilentlyContinue
-          if (-not $verifyUser) {
-              Write-Error "User creation failed for '$username'."
-              exit 1
-          }
+    # Final verification
+    if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
+        Write-Error "User creation/update failed"
+        exit 1
+    }
 
-          "RDP_CREDS=User: $username | Password: $password" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Successfully configured local user '$username'."
+    Write-Host "RDP user '$username' is ready."
