@@ -1,4 +1,4 @@
-name: "Windows 11 Tailscale Workflow"
+windows-11-vs2026-armname: "Windows 11 Tailscale Workflow"
 on:
   workflow_dispatch:
 
@@ -7,7 +7,7 @@ env:
 
 jobs:
   secure-rdp:
-    runs-on: windows-2022
+    runs-on: windows-11-arm
     timeout-minutes: 20000
     steps:
       - name: Configure Core RDP Settings
