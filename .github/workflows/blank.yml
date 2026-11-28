@@ -1,4 +1,4 @@
-windows-11-vs2026-armname: "Windows 11 Tailscale Workflow"
+name: "Windows 11 Tailscale Workflow"
 on:
   workflow_dispatch:
 
